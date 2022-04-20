@@ -1,0 +1,4 @@
+aiohttp
+websockets
+fake_useragent
+loguru
