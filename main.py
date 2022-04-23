@@ -5,9 +5,9 @@ import random
 import sys
 
 import aiohttp
-import websockets
 from fake_useragent import UserAgent
 from loguru import logger
+from urllib3 import proxy_from_url
 from websockets.exceptions import ConnectionClosedOK
 
 import settings
@@ -52,6 +52,18 @@ async def telegram_alert(username, message):
                 logger.error("invalid telegram bot token")
                 settings.bot_token = None
 
+class ProxyList:
+    
+    def __init__(self, proxy_list):
+        self.proxy_list = proxy_list
+        self.original_proxy_list = proxy_list.copy()
+
+
+    def get_proxy(self):
+        if self.proxy_list:
+            return "http://"+self.proxy_list.pop(random.randint(0, len(self.proxy_list)-1))
+        else:
+            self.proxy_list = self.original_proxy_list
 
 
 class DiscordAccount:
@@ -69,6 +81,8 @@ class DiscordAccount:
         self.companion = None
         self.delay = delay
         self.first = False
+        self.session = aiohttp.ClientSession()
+        self.proxy = PROXY_LIST.get_proxy()
 
 
     def set_channelid(self, channelid):
@@ -78,23 +92,21 @@ class DiscordAccount:
     async def me(self):
         url = f"https://discord.com/api/v9/users/@me"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=self.headers) as response:
-                if response.status == 401:
-                    return "Invalid token"
-                data = json.loads(await response.text())
-                self.username = data["username"]
-                self.id = data["id"]
-                return data 
+        async with self.session.get(url, headers=self.headers, proxy=self.proxy) as response:
+            if response.status == 401:
+                return "Invalid token"
+            data = json.loads(await response.text())
+            self.username = data["username"]
+            self.id = data["id"]
+            return data 
 
 
     
     async def typing(self):
         url = f"https://discord.com/api/v9/channels/{self._channelid}/typing"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=self.headers) as response:
-                logger.info(f"{self.username} typing...")
+        async with self.session.post(url, headers=self.headers, proxy=self.proxy) as response:
+            logger.info(f"{self.username} typing...")
 
 
     async def send_message(self, text):
@@ -110,18 +122,18 @@ class DiscordAccount:
 
         while True:
             await self.typing()
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=self.headers, data=data) as response:
-                    if response.status == 429:
-                        retry_time = int(json.loads(await response.text())["retry_after"])+1
-                        logger.error(f"{self.username} Rate limit. Sleep for {retry_time}")
-                        await asyncio.sleep(retry_time)
-                        continue
-                    elif response.status == 200:
-                        logger.success(f"{self.username} sent message")
-                        return
-                    else:
-                        logger.error(f"Unexcpected error {await response.text()}")
+
+            async with self.session.post(url, headers=self.headers, data=data, proxy=self.proxy) as response:
+                if response.status == 429:
+                    retry_time = int(json.loads(await response.text())["retry_after"])+1
+                    logger.error(f"{self.username} Rate limit. Sleep for {retry_time}")
+                    await asyncio.sleep(retry_time)
+                    continue
+                elif response.status == 200:
+                    logger.success(f"{self.username} sent message")
+                    return
+                else:
+                    logger.error(f"Unexcpected error {await response.text()}")
                 
 
     async def reply_to(self, text, guild_id, channel_id, message_id):
@@ -144,19 +156,18 @@ class DiscordAccount:
             }
         )
         while True:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=self.headers, data=data) as response:
-                    if response.status == 429:
-                        retry_time = int(json.loads(await response.text())["retry_after"])
-                        logger.error(f"{self.username} Rate limit. Sleep for {retry_time}")
-                        await asyncio.sleep(retry_time)
-                        continue
-                    elif response.status == 200:
-                        logger.success(f"{self.username} sent message [{text}]")
-                        return
-                    else:
-                        logger.error(f"Unexcpected error {await response.text()}")
-                    
+            async with self.session.post(url, headers=self.headers, data=data, proxy=self.proxy) as response:
+                if response.status == 429:
+                    retry_time = int(json.loads(await response.text())["retry_after"])
+                    logger.error(f"{self.username} Rate limit. Sleep for {retry_time}")
+                    await asyncio.sleep(retry_time)
+                    continue
+                elif response.status == 200:
+                    logger.success(f"{self.username} sent message [{text}]")
+                    return
+                else:
+                    logger.error(f"Unexcpected error {await response.text()}")
+                
 
 
     
@@ -166,7 +177,7 @@ class DiscordAccount:
             "d": self.s
         })
         while True:
-            await ws.send(heartbeat)
+            await ws.send_str(heartbeat)
             await asyncio.sleep(milliseconds*10**-3)
 
 
@@ -181,7 +192,7 @@ class DiscordAccount:
                 }
         })
         while True:
-            await ws.send(online)
+            await ws.send_str(online)
             await asyncio.sleep(60)
 
 
@@ -221,14 +232,14 @@ class DiscordAccount:
                     },"presence":{"status":"online","since":0,"activities":[],"afk":False},"compress":False,"client_state":{"guild_hashes":{},"highest_last_message_id":"0","read_state_version":0,"user_guild_settings_version":-1,"user_settings_version":-1}}})
         while True:
             try:
-                async with websockets.connect(url) as ws:
+                async with self.session.ws_connect(url, proxy=self.proxy) as ws:
                     
-                    await ws.send(authdata)
+                    await ws.send_str(authdata)
                     online = asyncio.create_task(self.online(ws))
                     asyncio.gather(online)
 
                     async for message in ws:
-                        data = json.loads(message)
+                        data = json.loads(message.data)
                         self.s = data["s"]
 
                         if data["op"] == 10:
@@ -290,6 +301,14 @@ if __name__ == "__main__":
     print("Dialog bot by @Zexten")
     logger.remove()
     logger.add(sys.stderr, format="<white>{time:HH:mm:ss}</white> | <level>{level: <8}</level> | <level>{message}</level>")
+    
+    proxy_path = input("Proxy path (empty in not): ")
+    if not proxy_path:
+        proxy = []
+    with open(proxy_path, "r") as file:
+        proxy = file.readlines()
+    PROXY_LIST = ProxyList(proxy)
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(main())
