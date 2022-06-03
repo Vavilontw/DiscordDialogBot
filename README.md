@@ -4,4 +4,4 @@
 
 По вопросам @Zexten
 
-TG channel - t.me/fakeavangard
+
