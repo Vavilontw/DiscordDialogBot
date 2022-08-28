@@ -56,7 +56,10 @@ class ProxyList:
     
     def __init__(self, proxy_list):
         self.proxy_list = proxy_list
-        self.original_proxy_list = proxy_list.copy()
+        if not proxy_list:
+            self.original_proxy_list = None
+        else:
+            self.original_proxy_list = proxy_list.copy()
 
 
     def get_proxy(self):
@@ -303,10 +306,11 @@ if __name__ == "__main__":
     logger.add(sys.stderr, format="<white>{time:HH:mm:ss}</white> | <level>{level: <8}</level> | <level>{message}</level>")
     
     proxy_path = input("Proxy path (empty in not): ")
-    if not proxy_path:
-        proxy = []
-    with open(proxy_path, "r") as file:
-        proxy = file.readlines()
+    if proxy_path == '':
+        proxy = None
+    else:
+        with open(proxy_path, "r") as file:
+            proxy = file.readlines()
     PROXY_LIST = ProxyList(proxy)
 
     loop = asyncio.new_event_loop()
